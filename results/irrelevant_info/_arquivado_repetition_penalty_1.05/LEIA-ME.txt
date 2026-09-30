@@ -1,0 +1,5 @@
+Execuções geradas com repetition_penalty=1.05 herdado do generation_config.json
+dos modelos Qwen2.5 (bug corrigido em src/interp/experiment.py em 2026-09-26:
+GREEDY força repetition_penalty=1.0). Não são comparáveis com os modelos que
+geraram com decodificação gulosa pura (Qwen3, Mistral, phi-4, ...).
+Guardadas só para referência; a fila refaz essas execuções.

@@ -1,0 +1,3 @@
+[submodule "external/rulearena"]
+	path = external/rulearena
+	url = https://github.com/skyriver-2000/RuleArena

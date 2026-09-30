@@ -1,0 +1,61 @@
+# Fila de modelos do estudo de informação irrelevante (rodar_fila.sh).
+#
+# Campos de cada modelo:
+#   id      modelo no HuggingFace
+#   gpus    1 = cabe numa GPU de 96 GB; 2 = dividido entre as duas
+#   lote    tamanho do lote de geração (um lote que estoura a VRAM é dividido
+#           ao meio automaticamente)
+#   ordem   prioridade: menor roda antes, também entre as fases. Números com
+#           intervalo, para encaixar novos modelos. Um modelo de 2 GPUs é uma
+#           barreira: os de 1 GPU com ordem menor rodam antes dele (dois em
+#           paralelo); os com ordem maior esperam, e, se estiverem rodando,
+#           são pausados no próximo salvamento e retomados depois
+#   rotulo  (opcional) sufixo da pasta de resultados, para não misturar com
+#           uma execução anterior do mesmo modelo
+#   max_tokens (opcional) limite de tokens gerados; padrão 4096. Modelos de
+#           raciocínio longo precisam de mais (VibeThinker usa ~15 mil)
+#
+# Arquiteturas aceitas (src/interp/activations.py, resolve_arch): Llama/Qwen/
+# Mistral/Phi-3 (pré-norma), OLMo 2/3 e Gemma 2-4 (pós-norma "sanduíche") e
+# LFM2 (híbrido convolução + atenção). Modelos MoE (ex.: Qwen3-30B-A3B,
+# LFM2.5-8B-A1B) são recusados com uma mensagem, sem travar a fila.
+#
+# Modelos "thinking" ficam de fora por padrão (ex.: LFM2.5-2.6B), porque o
+# estudo compara modelos sem modo de raciocínio. Exceção pedida: a série
+# VibeThinker (raciocínio longo, <think>...</think>), depois do 72B, com
+# max_tokens maior e o mesmo protocolo guloso dos demais.
+
+modelos:
+  # ── Fase 1: um modelo por GPU, do menor para o maior ────────────────────
+  # LFM (Liquid AI): arquitetura híbrida, convolução curta + atenção
+  - {id: LiquidAI/LFM2.5-1.2B-Instruct,              gpus: 1, lote: 16, ordem: 5}
+  - {id: LiquidAI/LFM2-2.6B,                         gpus: 1, lote: 16, ordem: 10}
+  - {id: Qwen/Qwen2.5-7B-Instruct,                   gpus: 1, lote: 16, ordem: 20}
+  # Qwen3-8B de novo nesta máquina, para separar o efeito do hardware do efeito
+  # do tamanho. O rótulo mantém intacta a execução de referência (RTX 5090),
+  # em results/irrelevant_info/Qwen3-8B_one_shot_frac0.30_seed42/
+  - {id: Qwen/Qwen3-8B,                              gpus: 1, lote: 16, ordem: 30, rotulo: rtxpro6000}
+  # OLMo 3 (AI2): totalmente aberto, pós-norma; substitui o Llama enquanto ele estiver restrito
+  - {id: allenai/Olmo-3-7B-Instruct,                 gpus: 1, lote: 16, ordem: 35}
+  - {id: meta-llama/Llama-3.1-8B-Instruct,           gpus: 1, lote: 16, ordem: 40}
+  - {id: Qwen/Qwen3-14B,                             gpus: 1, lote: 16, ordem: 50}
+  - {id: Qwen/Qwen2.5-14B-Instruct,                  gpus: 1, lote: 16, ordem: 60}
+  - {id: microsoft/phi-4,                            gpus: 1, lote: 16, ordem: 70}
+  - {id: mistralai/Mistral-Small-24B-Instruct-2501,  gpus: 1, lote: 12, ordem: 80}
+  # Gemma 4 (Google): denso, pós-norma, softcap nos logits
+  - {id: google/gemma-4-31B-it,                      gpus: 1, lote: 8,  ordem: 90}
+  - {id: Qwen/Qwen3-32B,                             gpus: 1, lote: 8,  ordem: 100}
+  - {id: Qwen/Qwen2.5-32B-Instruct,                  gpus: 1, lote: 8,  ordem: 110}
+  - {id: allenai/Olmo-3.1-32B-Instruct,              gpus: 1, lote: 8,  ordem: 120}
+  # ── Fase 2: dois GPUs, um de cada vez ───────────────────────────────────
+  - {id: Qwen/Qwen2.5-72B-Instruct,                  gpus: 2, lote: 4,  ordem: 200}
+  - {id: meta-llama/Llama-3.3-70B-Instruct,          gpus: 2, lote: 4,  ordem: 210}
+  # ── Depois do 72B (pedido em 2026-09-28): VibeThinker ──────────────────
+  # Raciocínio longo sobre Qwen2.5-Math-1.5B / Qwen2.5-Coder-3B. O cartão recomenda
+  # amostragem e até 40–100 mil tokens; aqui, guloso e 32 768 (~15 mil por resposta).
+  # Lotes grandes: 64 e 48 cabem em 96 GB mesmo com todas as respostas no limite
+  - {id: WeiboAI/VibeThinker-1.5B,                   gpus: 1, lote: 64, ordem: 240, max_tokens: 32768}
+  # SUSPENSO em 2026-09-29 a pedido do usuário, para liberar a GPU 1 (treinamento).
+  # 96 gerações salvas; para retomar, descomente a linha e rode `bash rodar_fila.sh`
+  # (retoma do .partial). A GPU precisa estar livre (< 2 GB em uso).
+  # - {id: WeiboAI/VibeThinker-3B,                   gpus: 1, lote: 48, ordem: 250, max_tokens: 32768}

@@ -1,0 +1,16 @@
+{
+  "intermediarios": {
+    "desfeitos_frase": 84,
+    "casos_frase": 234,
+    "desfeitos_controle": 12,
+    "casos_controle": 78,
+    "p_fisher": 0.0006116928789994796
+  },
+  "gemma": {
+    "desfeitos_frase": 11,
+    "casos_frase": 318,
+    "desfeitos_controle": 3,
+    "casos_controle": 106,
+    "p_fisher": 1.0
+  }
+}

@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+# capturas de ativações: ~23 GB, reproduzíveis com o notebook
+captures/
+*.pt
+# artefatos de execução
+*.log
+*.log.anterior
+*.pid
+*.exit
+results/irrelevant_info/fila*
+results/irrelevant_info/*/generations.jsonl.partial
+!results/irrelevant_info/_arquivado_repetition_penalty_1.05/**/generations.jsonl.partial
