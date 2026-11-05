@@ -202,6 +202,155 @@ comparável** entre tokenizadores de 1 dígito por token (Qwen, Gemma, Mistral)
 e de blocos de até 3 dígitos (OLMo, LFM, phi-4). "Distância fixa": frase
 inserida a 1–3 mil caracteres do fim da resposta.
 
+## Edição manual dos pesos do Qwen3-14B (sem treinamento)
+
+Experimento complementar (novembro de 2026): é possível fazer o Qwen3-14B
+acertar mais problemas **só trocando valores nos pesos**, sem gradiente, sem
+dados de treino e sem mudar o prompt? Código em [`edicao_pesos/`](edicao_pesos/),
+resultados em [`results/edicao_pesos/`](results/edicao_pesos/).
+
+### De onde vêm os erros
+
+Comparando as 90 respostas limpas do Qwen3-14B com o gabarito item a item,
+os erros não são de conta, são de regra, e três deles dominam:
+
+| Regra aplicada errado | Problemas afetados (de 90) |
+|---|---|
+| Mala de 63–65 polegadas cobrada como "acima de 65" ($200 em vez de $30) | 53 |
+| Peso de 51–53 lb cobrado na faixa de 54–70 lb ($100 em vez de $30) | 31 |
+| 3ª mala em rota dos EUA cobrada a $200 em vez de $150 | 20 |
+
+Nos três casos o modelo repete o texto do exemplo resolvido do prompt
+("over 65 inches", "Third Bag: $200") em vez de consultar a tabela.
+
+### Como os pesos foram editados
+
+1. **Sondas.** Das próprias respostas do modelo foram extraídos os pontos de
+   decisão: o prefixo cortado logo antes do dígito decisivo (por exemplo, em
+   "For dimensions over 6" o próximo token deve ser "2", não "5"). Cada sonda
+   tem o token correto e o errado, o que dá uma medida token a token do
+   efeito de cada edição sem gerar respostas inteiras.
+2. **Onde está o erro.** A atribuição direta ao logit por cabeça de atenção
+   (1 600 cabeças) explica pouco: as cabeças somam −0,8 de uma diferença de
+   logit de −7, e as mesmas cabeças ajudam num tipo de erro e atrapalham
+   noutro. O empurrão para o dígito errado vem das MLPs das camadas 33–39.
+   Já nas camadas 20–27 as ativações das MLPs separam "63–65" de "acima de
+   65" com AUC 0,98: o modelo *sabe* o tamanho da mala e erra a regra depois.
+3. **A edição.** Em cada camada escolhida, a matriz `down_proj` da MLP recebe
+   uma correção de posto baixo, em forma fechada:
+
+   ```
+   W_down  <-  W_down + α · d̂ · wᵀ
+   d̂ = (W_U[token correto] − W_U[token errado]) ⊙ γ_norm, normalizado
+   w = (KᵀK + λI)⁻¹ Kᵀ y
+   ```
+
+   `K` são as ativações dos neurônios (entrada de `down_proj`) em **todas**
+   as 1,36 milhão de posições de 180 respostas (as 90 da linha de base e as
+   90 de uma primeira versão editada), `y` vale 1 nos pontos de decisão do
+   erro e 0 em todo o resto; as posições vizinhas que não podem mudar (malas
+   acima de 65 polegadas, pesos de 54–70 lb, as outras linhas "Bag: $") pesam
+   100× na soma. `λ` = 0,1 da norma média das ativações e `α` foram escolhidos
+   à mão por varredura. É mínimos quadrados fechados, sem gradiente nem
+   iterações. Camadas e alvos:
+
+   | Camada | Alvo | Token correto × errado |
+   |---|---|---|
+   | 23 | "For dimensions over 6" ▸ (63–65 in) | 2 × 5 |
+   | 23 | "For dimensions over 62 inches up to " ▸ | 6 × 1 |
+   | 24 | "For weights over 5" ▸ (51–53 lb) | 0 × 3 |
+   | 31 | "Third Bag: $" ▸ (rota dos EUA) | 1 × 2 |
+   | 31 | "Third Bag: $1" ▸ | 5 × 0 |
+
+   A correção é guardada em forma fatorada (`U`, `V` em fp32), porque somada
+   entrada a entrada a um peso em bf16 ela é arredondada a zero.
+4. **Avaliação.** Mesmo protocolo do estudo (1-shot, decodificação gulosa,
+   4 096 tokens, lote 16). Como a geração em lote sozinha muda 57% das
+   respostas deste modelo, a linha de base foi gerada de novo nesta máquina.
+
+### Resultados
+
+Linha de base e modelo editado, mesmo protocolo, mesma máquina (90 problemas,
+pergunta sem frase):
+
+| Modelo | Acertos (90) | C0 / C1 / C2 | a ±10% | Erro mediano |
+|---|---|---|---|---|
+| Qwen3-14B (execução publicada acima) | 2 (2.2%) | 2 / 0 / 0 | 27 (30%) | 14.9% |
+| Qwen3-14B, linha de base refeita | 3 (3.3%) | 2 / 1 / 0 | 26 (29%) | 14.8% |
+| Qwen3-14B editado, α = 500 / 500 / 300 | **6 (6.7%)** | 5 / 1 / 0 | **48 (53%)** | **9.1%** |
+| Qwen3-14B editado, α = 800 / 800 / 500 | 5 (5.6%) | 4 / 1 / 0 | 36 (40%) | 10.5% (16 respostas cortadas em 4 096 tokens) |
+
+Com α maior a correção passa do ponto: 16 das 90 respostas entram em laço
+até o limite de tokens. A configuração 500 / 500 / 300 é a final.
+
+Quatro problemas novos passaram a ser acertados (c0_000, c0_003, c0_054,
+c1_077) e um foi perdido (c1_095). No nível 0, as respostas a ±10% do
+gabarito foram de 9 para 20 em 30 e o erro mediano de 17,9% para 7,9%. O
+modelo editado fica, em aproximação, no nível do Qwen2.5-32B (53% a ±10%).
+
+Token a token, nos pontos de decisão (sondas tiradas das respostas da linha
+de base e da primeira versão editada, 1 em cada 4):
+
+| Ponto de decisão | n | Sem edição | Editado |
+|---|---|---|---|
+| 63–65 in: "over 6" ▸ **2** | 106 | 47% | **96%** |
+| 63–65 in: "over 62 inches up to " ▸ **6** | 72 | 69% | 69% |
+| 51–53 lb: "over 5" ▸ **0** | 55 | 58% | **89%** |
+| 3ª mala EUA: "Third Bag: $" ▸ **1** | 15 | 0% | **100%** |
+| 3ª mala EUA: "Third Bag: $1" ▸ **5** | 6 | 100% | 100% |
+| vizinho: >65 in ▸ 5 (não deve mudar) | 95 | 97% | 98% |
+| vizinho: 54–70 lb ▸ 3 (não deve mudar) | 41 | 63% | 68% |
+| vizinho: "Fourth Bag: $" ▸ 2 (não deve mudar) | 29 | 83% | 79% |
+
+Tipos de erro por item nas 90 respostas (problemas afetados):
+
+| Regra | Linha de base | Editado |
+|---|---|---|
+| Mala de 63–65 in na faixa errada | 51 | **14** |
+| 3ª mala a $200 em vez de $150 | 21 | **5** |
+| Peso 51–53 lb na faixa errada | 32 | 24 |
+| Peso 54–70 lb na faixa errada | 24 | 29 |
+| Mala >65 in com taxa errada ($150 em vez de $200 nos EUA/Canadá) | 26 | 25 |
+
+### O que se aprende
+
+- **Três regras corrigidas sem treino.** Os três erros mais frequentes
+  caíram de 51, 21 e 32 problemas para 14, 5 e 24, com correções de posto 1
+  ou 2 em três matrizes, sem mexer em nenhum outro peso. A informação
+  necessária (o tamanho da mala) já estava nas ativações intermediárias;
+  faltava ligá-la ao dígito certo.
+- **O acerto exato sobe pouco porque os erros são muitos e independentes.**
+  Um problema tem de 4 a 10 malas, e basta um item errado. As regras
+  restantes (taxa de $200 para malas grandes nos EUA, faixa de 54–70 lb,
+  2ª mala, malas gratuitas de Business/First com limite de 70 lb) seguem
+  erradas e limitam o acerto exato a 6/90. A aproximação, que depende de
+  cada item, quase dobrou.
+- **A primeira tentativa vazou.** Uma correção ajustada só com as sondas e
+  480 posições aleatórias fixava o primeiro dígito, mas (a) o modelo seguia
+  com "over 62 inches up to 115" em metade dos casos, (b) a correção de
+  peso disparava também em "For weights over " e gerava "over 00 lbs" e
+  (c) a da 3ª mala vazava para "Fourth Bag" ($150 em vez de $200). Com
+  alvo zero em todas as 1,36 milhão de posições e peso 100× nos vizinhos,
+  (b) e (c) sumiram; (a) melhorou na geração livre (131 linhas "62–65 $30"
+  contra 13 na linha de base, nenhuma "62–115"), embora a sonda isolada
+  desse ponto não tenha mudado.
+- **Edição em bf16 some.** Somada entrada a entrada ao peso em bf16, a
+  correção é arredondada a zero (cada entrada é menor do que a resolução do
+  bf16 nos valores da matriz). É preciso mantê-la fatorada em fp32.
+- **Ruído de lote.** A linha de base refeita acerta 3 em vez de 2 e só 44
+  das 90 respostas são idênticas à execução publicada, como já medido pelo
+  controle do estudo. Diferenças de 1–2 acertos entre execuções não
+  significam nada; a aproximação (±10%) e os tipos de erro por item são
+  medidas mais estáveis.
+
+Reprodução: `edicao_pesos/sondas.py` (sondas), `diagnostico.py` e
+`coletar_mlp.py` (atribuição por cabeça e por MLP), `coletar_posicoes.py`
+(estatísticas de todas as posições, rodada 2), `construir_edicao_v3.py`
+(correções fechadas), `varrer_alpha.py` e `avaliar_sondas.py` (varredura e
+avaliação token a token), `gerar.py` (90 problemas) e `comparar.py`. Os
+fatores finais estão em `results/edicao_pesos/deltas/fatores_v4_L{23,24,31}.pt`
+e a configuração em `edicao_pesos/config_v4_500_500_300.json`.
+
 ## Limitações
 
 - **Acurácia perto de zero na maioria dos modelos.** Nesses modelos o
@@ -262,6 +411,7 @@ literatura está em
 | `results/irrelevant_info/resumo/` | tabelas-resumo (acurácia, comportamento, acertos desfeitos, ativações) |
 | `results/irrelevant_info/_arquivado_repetition_penalty_1.05/` | execução inicial do Qwen2.5-72B, feita com a penalidade de repetição herdada do `generation_config` (bug corrigido); guardada só como registro |
 | `tests/` | testes da inserção das frases, dos hooks por arquitetura e da fila (sem GPU) |
+| `edicao_pesos/`, `results/edicao_pesos/` | edição manual dos pesos do Qwen3-14B: scripts, configurações, fatores finais, gerações e avaliações token a token |
 
 **Fora do repositório:** as capturas de ativações (`captures/*.pt`, ~23 GB).
 Elas são reproduzíveis com o notebook, e as tabelas de `resumo/` guardam o

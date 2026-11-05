@@ -1,0 +1,19 @@
+{
+ "edicao_fatorada": [
+  {
+   "camada": 23,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v4_L23.pt",
+   "fator": 500
+  },
+  {
+   "camada": 24,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v4_L24.pt",
+   "fator": 500
+  },
+  {
+   "camada": 31,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v4_L31.pt",
+   "fator": 300
+  }
+ ]
+}

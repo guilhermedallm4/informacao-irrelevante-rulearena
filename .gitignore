@@ -13,3 +13,9 @@ captures/
 results/irrelevant_info/fila*
 results/irrelevant_info/*/generations.jsonl.partial
 !results/irrelevant_info/_arquivado_repetition_penalty_1.05/**/generations.jsonl.partial
+# edição manual dos pesos: ativações e sondas (reproduzíveis com edicao_pesos/*.py); ficam só os fatores finais
+results/edicao_pesos/sondas*.jsonl
+results/edicao_pesos/deltas/*
+!results/edicao_pesos/deltas/fatores_v4_L23.pt
+!results/edicao_pesos/deltas/fatores_v4_L24.pt
+!results/edicao_pesos/deltas/fatores_v4_L31.pt
