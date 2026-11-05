@@ -11,6 +11,9 @@ Config JSON:
   "edicao_fatorada": [ {"camada": L, "arquivo": "fatores.pt", "fator": a}, ... ]
       # W_down <- W_down + a * U Vᵀ, com U [d_model x r] e V [d_ff x r] guardados em fp32
       # (forma fatorada: evita o arredondamento do bf16, que zera ΔW somado entrada a entrada)
+  "edicao_up": [ {"camada": L, "arquivo": "fatores_up.pt", "fatores": [a_1, ..., a_r]}, ... ]
+      # W_up <- W_up + Σ_j a_j u_j v_jᵀ, com U [d_ff x r] (padrão de neurônios) e V [d_model x r]
+      # (chave no fluxo residual). O efeito passa pela gate: down(silu(gate x) ⊙ (up x + U (Vᵀx)))
 """
 import json, torch
 
@@ -24,6 +27,18 @@ class DownProjEditado(torch.nn.Module):
         self.register_buffer("V", V.float().to(down.weight.device))   # [d_ff, r]
     def forward(self, x):
         y = self.down(x)
+        return y + ((x.float() @ self.V) @ self.U.T).to(y.dtype)
+
+
+class UpProjEditado(torch.nn.Module):
+    """up_proj com o peso efetivo W + U Vᵀ (U [d_ff, r], V [d_model, r], fp32)."""
+    def __init__(self, up, U, V):
+        super().__init__()
+        self.up = up
+        self.register_buffer("U", U.float().to(up.weight.device))
+        self.register_buffer("V", V.float().to(up.weight.device))
+    def forward(self, x):
+        y = self.up(x)
         return y + ((x.float() @ self.V) @ self.U.T).to(y.dtype)
 
 
@@ -52,6 +67,15 @@ def aplicar(model, tok, cfg: dict) -> list[str]:
             V = F["V"]
         mlp.down_proj = DownProjEditado(base, U, V)
         log.append(f"down_proj camada {e['camada']}: W += {a} * U Vᵀ de {e['arquivo']} (posto {F['U'].shape[1]})")
+    for e in cfg.get("edicao_up", []):
+        F = torch.load(e["arquivo"]); a = torch.tensor(e["fatores"], dtype=torch.float32).view(1, -1)
+        mlp = model.model.layers[e["camada"]].mlp
+        base = mlp.up_proj.up if isinstance(mlp.up_proj, UpProjEditado) else mlp.up_proj
+        U = F["U"] * a; V = F["V"]
+        if isinstance(mlp.up_proj, UpProjEditado):
+            U = torch.cat([mlp.up_proj.U.cpu(), U], 1); V = torch.cat([mlp.up_proj.V.cpu(), V], 1)
+        mlp.up_proj = UpProjEditado(base, U, V)
+        log.append(f"up_proj camada {e['camada']}: W += {a} * U Vᵀ de {e['arquivo']} (posto {F['U'].shape[1]})")
     for v in cfg.get("vies_residual", []):
         L = v["camada"]
         WU = model.lm_head.weight

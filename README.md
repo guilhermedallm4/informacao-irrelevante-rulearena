@@ -281,11 +281,13 @@ pergunta sem frase):
 | Qwen3-14B editado, α = 800 / 800 / 500 | 5 (5.6%) | 4 / 1 / 0 | 36 (40%) | 10.5% (16 respostas cortadas em 4 096 tokens) |
 | Rodada 3: 17 decisões, chaves só dos traços-gabarito | 0 (0%) | 0 / 0 / 0 | 13 (14%) | 67 respostas em laço |
 | Rodada 4: 17 decisões, chaves com alvo zero nas respostas livres | 5 (5.6%) | 2 / 3 / 0 | 43 (48%) | 9.1% (6 em laço) |
-| Rodada 5: rodada 2 + 12 decisões da rodada 4 (`config_v7B.json`) | **7 (7.8%)** | 7 / 0 / 0 | 47 (52%) | **7.4%** (8 em laço) |
+| Rodada 5: rodada 2 + 12 decisões da rodada 4 (`config_v7B.json`) | 7 (7.8%) | 7 / 0 / 0 | 47 (52%) | **7.4%** (8 em laço) |
+| Rodada 6, ciclo 6: 23 decisões em `up_proj`, filtradas pela porta da MLP (`config_c6.json`) | **10 (11.1%)** | 9 / 1 / 0 | 45 (50%) | 10.0% (0 em laço) |
+| Rodada 6, ciclo 8: 25 decisões em `up_proj`, α calibrado por classe | 0 (0%) | 0 / 0 / 0 | 25 (28%) | 19.8% (12 em laço) |
 
 Com α maior a correção passa do ponto: 16 das 90 respostas entram em laço
 até o limite de tokens. A configuração 500 / 500 / 300 é a final da rodada 2;
-as rodadas 3–5 estão descritas abaixo.
+as rodadas 3–6 estão descritas abaixo.
 
 Quatro problemas novos passaram a ser acertados (c0_000, c0_003, c0_054,
 c1_077) e um foi perdido (c1_095). No nível 0, as respostas a ±10% do
@@ -319,8 +321,9 @@ Tipos de erro por item nas 90 respostas (problemas afetados):
 ### Rodadas 3–5: todas as decisões, meta de 60%
 
 Pedido seguinte: estender a edição manual a todas as regras restantes e
-tentar chegar a 60% de acerto exato. Não chegou: o melhor resultado é 7/90
-(7,8%). O que foi feito e por que o teto é baixo:
+tentar chegar a 60% de acerto exato. Não chegou: o melhor resultado destas
+rodadas é 7/90 (7,8%); a rodada 6, abaixo, chega a 10/90. O que foi feito e
+por que o teto é baixo:
 
 1. **Censo por teacher forcing.** Para cada um dos 90 problemas foi escrito o
    *traço-gabarito*: a resposta ideal no formato exato do exemplo do prompt,
@@ -386,6 +389,73 @@ vez de $45 (7, decisão que o modelo acerta no traço e erra no texto livre).
 Cada uma dessas é uma chave a mais com o mesmo risco de vazamento, e o ganho
 em acerto exato por chave tem sido de 1–2 problemas, dentro do ruído de lote.
 
+### Rodada 6: edição em `up_proj`, filtrada pela porta da MLP
+
+Nas rodadas anteriores a chave lia a entrada de `down_proj` (os 17 408
+neurônios já filtrados pela porta) e escrevia a direção do dígito certo no
+fluxo residual. Ela dispara em qualquer posição cujo padrão de neurônios se
+pareça com o do ponto de decisão, e daí vêm o vazamento e os laços. A rodada 6
+muda o lugar da correção: a chave v_j lê o fluxo residual na **entrada** da
+MLP (5 120 dimensões, pós-norma) e o padrão u_j é injetado em `up_proj`,
+antes da porta:
+
+```
+W_up  <-  W_up + α · u_j · v_jᵀ
+v_j = (G_x + λI + β K_MᵀK_M)⁻¹ b_j                       (chave no fluxo residual)
+u_j = ḡ ⊙ W_downᵀ (W_down diag(ḡ²) W_downᵀ + μI)⁻¹ d̂       (padrão sobre os neurônios)
+```
+
+O efeito na posição i é W_down (g_i ⊙ u_j) · (v_j·x_i), onde g_i =
+silu(W_gate x_i) é a porta original do modelo e ḡ a porta média na classe.
+A correção só chega ao fluxo residual pelos neurônios que a porta do próprio
+modelo deixou abertos naquele contexto: `gate_proj` e `down_proj` não mudam,
+e o filtro de contexto vem de graça. G_x soma x xᵀ em todas as posições dos
+traços-gabarito e das respostas livres (alvo zero), K_M são as marcas
+(alvo 1, peso β = 100), a camada de cada classe é escolhida por validação
+cruzada entre 22 e 34, e cada u_j é normalizado para projeção média 1 em d̂
+(`coletar_residual.py`, `construir_edicao_up.py`; `UpProjEditado` em
+`edicoes.py`).
+
+Quatro versões dos fatores diferem nos dados: **up1** (17 classes) usa como
+positivos só as marcas dos traços-gabarito e como alvo zero os traços mais
+4,2 milhões de posições de respostas livres; **up2** é o mesmo sem as camadas
+23, 24 e 31, para somar à rodada 2; **up3** (23 classes) acrescenta como
+positivos 7 450 marcas localizadas por regex nas respostas livres do próprio
+modelo (`medir_livre.py`), de modo que a chave é ajustada no texto que o
+modelo realmente escreve; **up4** (25 classes) acrescenta ainda as marcas e
+as posições das respostas dos ciclos 6 e 7. Os α por classe foram escolhidos
+à mão (`ajustar_config.py`) ou calibrados pela inclinação da margem medida
+com α = 100 (`calibrar_v5.py`). Oito ciclos de geração, 90 problemas cada,
+avaliados com `avaliar_ciclo.py`, que também detecta laços sem corte:
+
+| Ciclo | Configuração | Acertos | C0 / C1 / C2 | a ±10% | Erro mediano | Laços |
+|---|---|---|---|---|---|---|
+| 1 | up1, α calibrado | 1 | 1 / 0 / 0 | 46 | 9,7% | 0 |
+| 2 | rodada 2 + up1 | 6 | 5 / 0 / 1 | 26 | 16,8% | 6 |
+| 3 | rodada 2 + up2 | 3 | 3 / 0 / 0 | 38 | 12,2% | 1 |
+| 4 | up1, α retocado à mão | 7 | 7 / 0 / 0 | 42 | 10,8% | 3 |
+| 5 | up3, α à mão, "Within" 450 | 6 | 5 / 1 / 0 | 30 | 15,3% | 0 |
+| **6** | **up3, "Within" zerado (`config_c6.json`)** | **10** | 9 / 1 / 0 | 45 | 10,0% | **0** |
+| 7 | ciclo 6 com três α retocados | 7 | 6 / 1 / 0 | 47 | 8,8% | 0 |
+| 8 | up4, α calibrado por classe (15 de 25 no teto de 500) | 0 | 0 / 0 / 0 | 25 | 19,8% | 12 |
+
+O ciclo 6 é o melhor resultado de todo o experimento em acerto exato: 10/90
+contra 3/90 da linha de base, sem nenhuma resposta em laço. Três ressalvas:
+
+- O ganho está nos problemas simples (9 dos 10 são de complexidade 0, 30
+  problemas, 4 a 5 malas). Na aproximação ele não supera a rodada 2 (45
+  contra 48 a ±10%, erro mediano 10,0% contra 9,1%).
+- Por item, o ciclo 6 corrige outras regras que a rodada 2 (lista de taxas
+  por mala, 2ª mala, faixas de peso das malas gratuitas) mas é pior nas
+  faixas de tamanho: 25 problemas com erro em 63–65 in (14 na rodada 2) e
+  37 em >65 in (25). As duas edições consertam coisas diferentes, e somá-las
+  (ciclos 2 e 3) trouxe de volta os laços.
+- O ciclo 8 mostra o limite: calibrar cada classe para margem 3 na geração
+  livre pôs 15 das 25 chaves no teto de 500 e o modelo colapsou (12 laços,
+  0/90), mesmo com a porta filtrando. A chave "Within" (limite de 70 lb das
+  malas gratuitas) continua sendo a que derruba o modelo quando forte; zerá-la
+  foi o que levou o ciclo 5 ao 6.
+
 ### O que se aprende
 
 - **Três regras corrigidas sem treino.** Os três erros mais frequentes
@@ -411,6 +481,14 @@ em acerto exato por chave tem sido de 1–2 problemas, dentro do ruído de lote.
 - **Edição em bf16 some.** Somada entrada a entrada ao peso em bf16, a
   correção é arredondada a zero (cada entrada é menor do que a resolução do
   bf16 nos valores da matriz). É preciso mantê-la fatorada em fp32.
+- **A porta da MLP é um filtro de contexto pronto.** Mover a correção de
+  `down_proj` para `up_proj` faz o empurrão passar pela `gate_proj` original:
+  só os neurônios que o modelo já abre naquele contexto transmitem a chave.
+  Com isso, 23 chaves com α até 500 geraram zero laços (ciclos 5–7), onde a
+  mesma quantidade de chaves em `down_proj` gerava 6–8. O ganho em acerto
+  exato (10/90) vem daí, mas a calibração automática que leva todas as chaves
+  ao teto colapsa do mesmo jeito (ciclo 8): a porta reduz o vazamento, não o
+  elimina.
 - **Teacher forcing não prevê a geração livre.** Nos traços-gabarito a
   rodada 3 fechava 17 decisões; na geração livre colapsou. O que a geração
   livre acrescenta é o texto do próprio modelo, que o traço ideal não tem.
@@ -420,7 +498,8 @@ em acerto exato por chave tem sido de 1–2 problemas, dentro do ruído de lote.
   o acerto exato exige todas, e os erros fora dos itens (bagagem de mão,
   lista de taxas, reordenação das malas) não têm um ponto de decisão único
   para editar. A medida que responde à edição é a aproximação (26 → 48 a
-  ±10%) e o erro mediano (14,8% → 7,4%), não o acerto exato (3 → 7).
+  ±10%) e o erro mediano (14,8% → 7,4%), não o acerto exato (3 → 7, e 10
+  na rodada 6 com aproximação pior).
 - **Ruído de lote.** A linha de base refeita acerta 3 em vez de 2 e só 44
   das 90 respostas são idênticas à execução publicada, como já medido pelo
   controle do estudo. Diferenças de 1–2 acertos entre execuções não
@@ -439,8 +518,16 @@ fatores da rodada 2 estão em `results/edicao_pesos/deltas/fatores_v4_L{23,24,31
 `calibrar_v5.py` (17 classes e α), `vazamento_livre.py` (resposta das chaves
 no texto livre), `juntar.py` (fatias por GPU); fatores em
 `deltas/fatores_v6_L{22,26,30,32,34}.pt` com `deltas/classes_v6.json`, e a
-configuração final (7/90) em `edicao_pesos/config_v7B.json`. Respostas de
-cada rodada em `results/edicao_pesos/editado_*.jsonl`.
+configuração final (7/90) em `edicao_pesos/config_v7B.json`. Rodada 6:
+`coletar_residual.py` (x na entrada da MLP e G_x nos traços e nas respostas
+livres), `medir_livre.py` (marcas nas respostas livres do modelo),
+`construir_edicao_up.py` (chaves e padrões em `up_proj`), `vazamento_up.py`
+(empurrão de cada chave por posição e atribuição dos laços),
+`ajustar_config.py` e `calibrar_v5.py` (α por classe), `avaliar_ciclo.py`
+(acertos, ±10%, laços); fatores em `deltas/fatores_up3_L{22,26,28,30,32,34}.pt`
+com `deltas/classes_up3.json` e a configuração do ciclo 6 (10/90) em
+`edicao_pesos/config_c6.json`. Respostas de cada rodada em
+`results/edicao_pesos/editado_*.jsonl` e `results/edicao_pesos/ciclo{1..8}.jsonl`.
 
 ## Limitações
 

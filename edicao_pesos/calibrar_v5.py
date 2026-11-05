@@ -8,9 +8,10 @@ def escrever(cfg_path, alphas, sufixo):
     cls = classes(sufixo); por = collections.defaultdict(dict)
     for j, c in enumerate(cls): por[c["camada"]][c["indice_na_camada"]] = alphas[j]
     ed = [{"camada": L, "arquivo": f"{D}fatores_{sufixo}_L{L}.pt", "fatores": [v[i] for i in sorted(v)]} for L, v in sorted(por.items())]
-    json.dump({"edicao_fatorada": ed}, open(cfg_path, "w"), indent=1)
+    chave = "edicao_up" if cls and cls[0].get("tipo") == "up" else "edicao_fatorada"
+    json.dump({chave: ed}, open(cfg_path, "w"), indent=1)
 def margens(traco_path):
-    meta = torch.load(traco_path)["meta"]; por = collections.defaultdict(list)
+    meta = [m for pth in traco_path.split(",") for m in torch.load(pth)["meta"]]; por = collections.defaultdict(list)
     for m in meta: por[(m["nome"], m["gold"])].append(m)
     return por
 if __name__ == "__main__":
