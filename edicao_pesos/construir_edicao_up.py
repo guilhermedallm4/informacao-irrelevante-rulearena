@@ -8,13 +8,13 @@ Para a classe j (decisão, token correto) na camada L:
          ḡ = média de silu(W_gate x_i) na classe (gate média):  u = ḡ ⊙ W_downᵀ (W_down diag(ḡ²) W_downᵀ + μI)⁻¹ d̂.
 Efeito na posição i: W_down (g_i ⊙ u_j) · (v_j·x_i), i.e., só onde a gate está aberta.
 u_j é normalizado para projeção média 1 em d̂ na classe; v_j para resposta média 1.
-Uso: construir_edicao_up.py <res_tracos.pt> <saida_dir> [λ_rel=0.1] [β=100] [min_erros=2] [sufixo=up1] [G_extra=a.pt,b.pt] [peso_extra=1] [μ_rel=0.01]
+Uso: construir_edicao_up.py <res_tracos.pt> <saida_dir> [λ_rel=0.1] [β=100] [min_erros=2] [sufixo=up1] [G_extra=a.pt,b.pt] [peso_extra=1] [μ_rel=0.01] [excluir=L,L] [gpu=0] [prefixo_classe]
 """
 import sys, json, torch, collections
 from pathlib import Path
 from sklearn.metrics import roc_auc_score
 
-def main(res_path, saida_dir, lambda_rel=0.1, beta=100.0, min_erros=2, sufixo="up1", G_extra="", peso_extra=1.0, mu_rel=0.01, excluir="", dev="cuda:0"):
+def main(res_path, saida_dir, lambda_rel=0.1, beta=100.0, min_erros=2, sufixo="up1", G_extra="", peso_extra=1.0, mu_rel=0.01, excluir="", dev="cuda:0", prefixo=""):
     excl = {int(x) for x in excluir.split(",") if x}
     D = torch.load(res_path); cam = D["camadas"]; acts = D["acts"]; meta = D["meta"]; n = D["n_pos"]
     for ge in [g for g in G_extra.split(",") if g]:
@@ -37,7 +37,7 @@ def main(res_path, saida_dir, lambda_rel=0.1, beta=100.0, min_erros=2, sufixo="u
     classes = []
     for (nome, g), ix in sorted(por.items()):
         erros = [i for i in ix if meta[i]["top"][0] != g]
-        if len(erros) < min_erros: continue
+        if len(erros) < min_erros or (prefixo and not nome.startswith(prefixo)): continue
         t = collections.Counter(meta[i]["top"][0] for i in erros).most_common(1)[0][0]
         viz = [i for i, m in enumerate(meta) if m["nome"] == nome and m["gold"] != g]
         classes.append(dict(nome=nome, gold=g, gold_txt=meta[ix[0]]["gold_txt"], wrong=t,
@@ -96,4 +96,5 @@ def main(res_path, saida_dir, lambda_rel=0.1, beta=100.0, min_erros=2, sufixo="u
 if __name__ == "__main__":
     a = sys.argv
     main(a[1], a[2], float(a[3]) if len(a) > 3 else 0.1, float(a[4]) if len(a) > 4 else 100.0, int(a[5]) if len(a) > 5 else 2, a[6] if len(a) > 6 else "up1",
-         a[7] if len(a) > 7 else "", float(a[8]) if len(a) > 8 else 1.0, float(a[9]) if len(a) > 9 else 0.01, a[10] if len(a) > 10 else "")
+         a[7] if len(a) > 7 else "", float(a[8]) if len(a) > 8 else 1.0, float(a[9]) if len(a) > 9 else 0.01, a[10] if len(a) > 10 else "",
+         f"cuda:{a[11]}" if len(a) > 11 else "cuda:0", a[12] if len(a) > 12 else "")

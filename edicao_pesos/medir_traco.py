@@ -4,7 +4,7 @@ Para cada um dos 90 problemas: prompt 1-shot + traço-gabarito, uma passagem.
 Em cada ponto de decisão marcado: token correto, top-5 do modelo, margem
 logit(correto) - logit(melhor outro). Guarda a ativação (entrada de down_proj,
 fp16) nas CAMADAS e acumula G_L = KᵀK sobre todas as posições (restrição de
-alvo zero). Uso: medir_traco.py <saida.pt> [config_edicoes.json]
+alvo zero). Uso: medir_traco.py <saida.pt> [config_edicoes.json|-] [semG|comG] [gpu] [reordenar=0|1]
 """
 import sys, json, torch, collections
 from pathlib import Path
@@ -15,14 +15,15 @@ from edicao_pesos.traco_gabarito import traco
 from edicao_pesos.edicoes import aplicar
 MODEL = "Qwen/Qwen3-14B"; CAMADAS = [20, 22, 24, 26, 28, 30, 32, 34]
 
-def main(out_path, cfg_path=None, com_G=True):
+def main(out_path, cfg_path=None, com_G=True, gpu=0, reordenar=False):
+    dev = f"cuda:{gpu}"
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(MODEL)
-    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="cuda:0", attn_implementation="sdpa").eval()
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map=dev, attn_implementation="sdpa").eval()
     if cfg_path:
         for l in aplicar(model, tok, json.load(open(cfg_path))): print("  edição:", l)
     dff = model.config.intermediate_size
-    G = {L: torch.zeros(dff, dff, dtype=torch.float32, device="cuda:0") for L in CAMADAS}
+    G = {L: torch.zeros(dff, dff, dtype=torch.float32, device=dev) for L in CAMADAS}
     store = {}
     for L in CAMADAS:
         mlp = model.model.layers[L].mlp
@@ -34,10 +35,10 @@ def main(out_path, cfg_path=None, com_G=True):
     with torch.no_grad():
         for s in sample:
             p = probs[s["complexity"]][s["problem_idx"]]
-            texto, marcas, total = traco(p)
+            texto, marcas, total = traco(p, reordenar)
             prefix = chat_prompt(tok, s["question"], "one_shot"); full = prefix + texto
             enc = tok(full, add_special_tokens=False, return_offsets_mapping=True)
-            ids = torch.tensor([enc["input_ids"]], device="cuda:0"); starts = [a for a, b in enc["offset_mapping"]]
+            ids = torch.tensor([enc["input_ids"]], device=dev); starts = [a for a, b in enc["offset_mapping"]]
             logits = model(input_ids=ids, use_cache=False).logits[0].float()
             T = ids.shape[1]; n_pos += T
             if com_G:
@@ -65,4 +66,5 @@ def main(out_path, cfg_path=None, com_G=True):
     print("salvo", out_path, n_pos, "posições")
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "-" else None, com_G=not (len(sys.argv) > 3 and sys.argv[3] == "semG"))
+    a = sys.argv
+    main(a[1], a[2] if len(a) > 2 and a[2] != "-" else None, com_G=not (len(a) > 3 and a[3] == "semG"), gpu=int(a[4]) if len(a) > 4 else 0, reordenar=bool(int(a[5])) if len(a) > 5 else False)

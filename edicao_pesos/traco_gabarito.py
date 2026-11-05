@@ -15,8 +15,14 @@ Decisões marcadas (nome: o que o modelo tem de escolher):
   item_valor   : "Total Fee for Item N: $chk (checking) + $" ▸ 1º dígito (o maior entre os/ow)
   item_total   : "= $" ▸ 1º dígito do total do item
   total        : "The total cost is $" ▸ 1º dígito
+  ordem_lista  : número de cada item em "Items to be checked: Items ..." (1º dígito)
+  ordem_item   : número do item em "k. Item " (1º dígito)
+Com reordenar=True as malas despachadas são escritas na ordem do gabarito oficial
+(np.argsort(-ganho), ganho = violação sem franquia − violação com franquia), que
+aplica a franquia de Business/First às malas que mais se beneficiam.
 """
 import sys, json, re
+import numpy as np
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.airline.gold import load_airline_problems, get_check_base_tables, compute_oversize, compute_overweight
@@ -28,12 +34,22 @@ def regiao_frase(rt):
     if rt == "U.S.": return "within the U.S."
     return f"between the U.S. and {rt}"
 
-def traco(p):
-    """Devolve (texto, marcas) para um problema do RuleArena (dict com prompt e info)."""
+def ordem_gabarito(bags, rt, cls):
+    """Mesma reordenação de src/airline/gold.py: argsort(-ganho)."""
+    os_c = [compute_oversize(b, rt) for b in bags]
+    comp = [compute_overweight(b, rt, cls, True) for b in bags]
+    nocomp = [compute_overweight(b, rt, cls, False) for b in bags]
+    gain = np.array(np.maximum(os_c, nocomp)) - np.array(np.maximum(os_c, comp))
+    return [int(i) for i in np.argsort(-gain)]
+
+def traco(p, reordenar=False):
+    """Devolve (texto, marcas, total) para um problema do RuleArena (dict com prompt e info)."""
     info = p["info"]; q = p["prompt"]; tables = get_check_base_tables()
     nome = q.split(" is a ")[0]
     cls = info["customer_class"]; rt = info["routine"]; direc = info["direction"]
     bags_all = info["bag_list"]; carry = bags_all[0]; bags = bags_all[1:]
+    ordem = ordem_gabarito(bags, rt, cls) if reordenar else list(range(len(bags)))
+    bags = [bags[i] for i in ordem]; num = [i + 2 for i in ordem]      # número do item como no enunciado
     base = [int(tables[min(3, i)][direc][cls][rt]) for i in range(len(bags))]
     out = []; marcas = []
     def w(s): out.append(s)
@@ -48,8 +64,11 @@ def traco(p):
     cd = carry["size"]
     w(f"- Item 1 ({carry['name'].capitalize()}):\n  - Dimensions: {cd[0]} x {cd[1]} x {cd[2]} inches\n  - Weight: {carry['weight']} lbs\n  - This fits within the carry-on size limit of 22 x 14 x 9 inches.\n  - Fee: $0 (Allowed as carry-on bag)\n")
     w(f"- {nome} does not have any items that fit the personal item dimensions (18 x 14 x 8 inches). So, no personal item is carried.\n\n")
-    n = len(bags); itens = ", ".join(str(i + 2) for i in range(n - 1)) + f", and {n + 1}"
-    w(f"Checked Bags:\n- Items to be checked: Items {itens}\n")
+    n = len(bags)
+    w("Checked Bags:\n- Items to be checked: Items ")
+    for i in range(n):
+        if i == n - 1 and n > 1: w("and ")
+        marca("ordem_lista", str(num[i])); w("\n" if i == n - 1 else ", ")
     livres = sum(1 for b in base if b == 0)
     if cls == "Main Plus": w(f"- {nome} is a Main Plus passenger, which includes 1 extra free checked bag in addition to the Main Cabin allowance, for a total of {livres} free checked bag{'s' if livres != 1 else ''}.\n")
     else: w(f"- {nome} is a {cls} passenger, which includes {livres} free checked bag{'s' if livres != 1 else ''}.\n")
@@ -62,7 +81,7 @@ def traco(p):
         sz = sum(b["size"]); wt = b["weight"]; comp = base[i] == 0 and cls in ("Business", "First")
         lim = 70 if comp else 50
         g_os = compute_oversize(b, rt); g_ow = compute_overweight(b, rt, cls, comp)
-        w(f"{i+1}. Item {i+2} ({b['name'].capitalize()}):\n   - Dimensions: {b['size'][0]} x {b['size'][1]} x {b['size'][2]} inches\n     - Total dimensions: {b['size'][0]} + {b['size'][1]} + {b['size'][2]} = {sz} inches\n     -")
+        w(f"{i+1}. Item "); marca("ordem_item", str(num[i])); w(f" ({b['name'].capitalize()}):\n   - Dimensions: {b['size'][0]} x {b['size'][1]} x {b['size'][2]} inches\n     - Total dimensions: {b['size'][0]} + {b['size'][1]} + {b['size'][2]} = {sz} inches\n     -")
         if sz > 62: marca("tam_lim", " Over the standard size limit of 62 inches.\n")
         else: marca("tam_lim", " Within the standard size limit of 62 inches.\n")
         w(f"   - Weight: {wt} lbs\n     -")
@@ -85,13 +104,13 @@ def traco(p):
             w(", the fee is $"); marca("ow_fee", f"{g_ow}.\n")
         if g_os and g_ow: w("   - The higher of oversize and overweight fee should apply.\n")
         v = max(g_os, g_ow); tot = base[i] + v; fees.append(tot); tot_bags += tot
-        w(f"   - Total Fee for Item {i+2}: ${base[i]} (checking) + $")
+        w(f"   - Total Fee for Item {num[i]}: ${base[i]} (checking) + $")
         if v == 0: marca("item_valor", "0 (No overweight or oversize fees)")
         else: marca("item_valor", f"{v} ({'oversize' if g_os >= g_ow else 'overweight'})")
         w(" = $"); marca("item_total", f"{tot}\n")
     w("Summary of Baggage Fees:\n")
-    for i, f in enumerate(fees): w(f"  - Item {i+2}: ${f}\n")
-    w("Total Baggage Fees: " + " + ".join(f"${f} (Item {i+2})" for i, f in enumerate(fees)) + f" = ${tot_bags}\n")
+    for i, f in enumerate(fees): w(f"  - Item {num[i]}: ${f}\n")
+    w("Total Baggage Fees: " + " + ".join(f"${f} (Item {num[i]})" for i, f in enumerate(fees)) + f" = ${tot_bags}\n")
     total = info["base_price"] + tot_bags
     w(f"Total Cost:\n- Flight Ticket: ${info['base_price']}\n- Total Baggage Fees: ${tot_bags}\n- The total cost is $"); marca("total", f"{total:,}.")
     return "".join(out), marcas, total
@@ -104,7 +123,9 @@ if __name__ == "__main__":
     for s in sample[:1]:
         p = probs[s["complexity"]][s["problem_idx"]]
         t, marcas, total = traco(p); print(t); print(marcas[:12]); print("gold", s["gold"], total)
-    ok = 0
-    for s in sample:
-        p = probs[s["complexity"]][s["problem_idx"]]; t, marcas, total = traco(p); ok += (total == s["gold"])
-    print("traços com total igual ao gabarito:", ok, "/", len(sample))
+    for reord in (False, True):
+        ok = 0; mudou = 0
+        for s in sample:
+            p = probs[s["complexity"]][s["problem_idx"]]; t, marcas, total = traco(p, reord); ok += (total == s["gold"])
+            if reord: mudou += ordem_gabarito(p["info"]["bag_list"][1:], p["info"]["routine"], p["info"]["customer_class"]) != list(range(len(p["info"]["bag_list"]) - 1))
+        print(f"reordenar={reord}: traços com total igual ao gabarito: {ok}/{len(sample)}" + (f", ordem diferente da do enunciado em {mudou}" if reord else ""))

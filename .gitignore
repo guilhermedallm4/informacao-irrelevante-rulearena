@@ -27,3 +27,7 @@ results/edicao_pesos/deltas/*
 !results/edicao_pesos/deltas/fatores_up3_L34.pt
 !results/edicao_pesos/deltas/classes_up3.json
 !results/edicao_pesos/deltas/classes_up4.json
+!results/edicao_pesos/deltas/fatores_ord1_L20.pt
+!results/edicao_pesos/deltas/fatores_ord1_L31.pt
+!results/edicao_pesos/deltas/fatores_ord1_L34.pt
+!results/edicao_pesos/deltas/classes_ord1.json

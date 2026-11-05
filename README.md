@@ -284,6 +284,7 @@ pergunta sem frase):
 | Rodada 5: rodada 2 + 12 decisões da rodada 4 (`config_v7B.json`) | 7 (7.8%) | 7 / 0 / 0 | 47 (52%) | **7.4%** (8 em laço) |
 | Rodada 6, ciclo 6: 23 decisões em `up_proj`, filtradas pela porta da MLP (`config_c6.json`) | **10 (11.1%)** | 9 / 1 / 0 | 45 (50%) | 10.0% (0 em laço) |
 | Rodada 6, ciclo 8: 25 decisões em `up_proj`, α calibrado por classe | 0 (0%) | 0 / 0 / 0 | 25 (28%) | 19.8% (12 em laço) |
+| Rodada 7, ciclo 9: ciclo 6 + 4 cabeças de cópia zeradas + 12 chaves de ordem (`config_c9.json`) | 6 (6.7%) | 6 / 0 / 0 | 36 (40%) | 13.6% (0 em laço) |
 
 Com α maior a correção passa do ponto: 16 das 90 respostas entram em laço
 até o limite de tokens. A configuração 500 / 500 / 300 é a final da rodada 2;
@@ -456,6 +457,67 @@ contra 3/90 da linha de base, sem nenhuma resposta em laço. Três ressalvas:
   malas gratuitas) continua sendo a que derruba o modelo quando forte; zerá-la
   foi o que levou o ciclo 5 ao 6.
 
+### Rodada 7: reordenar as malas e não copiar o exemplo
+
+Pedido seguinte: ajustar os pesos, ainda por forma fechada, para que o modelo
+(a) reordene as malas como o gabarito oficial e (b) deixe de copiar o exemplo
+resolvido do prompt. Nenhuma das duas coisas é uma decisão de um token que uma
+chave de posto baixo consiga mover, e o experimento mostra por quê.
+
+**Reordenação.** O gabarito ordena as malas despachadas por ganho decrescente
+(ganho = violação sem franquia − violação com franquia, `argsort(−ganho)`),
+o que dá as malas gratuitas de Business/First às que mais se beneficiam.
+`traco_gabarito.py` ganhou essa ordem (`reordenar=True`): os traços passam a
+bater com o gabarito em 89 dos 90 problemas (68 na ordem do enunciado), e em
+26 problemas a ordem muda. Cada número de item na lista "Items to be checked:
+Items …" e na enumeração "k. Item …" virou um ponto de decisão (`ordem_lista`,
+`ordem_item`). Medidas (`avaliar_ordem.py`):
+
+| | Nos 26 problemas com ordem diferente | Nos 64 com a mesma ordem |
+|---|---|---|
+| Sem edição, teacher forcing: lista inteira certa / 1º item certo | 0 / 4 | 64 / 64 |
+| Sem edição, geração livre: enumera na ordem do gabarito | 0 (12 na ordem do enunciado, 14 ilegíveis) | — |
+| 12 chaves `up_proj` (`ord1`), α = 100, teacher forcing | 0 / 4 | 64 / 64 |
+| idem, α = 300 | 0 / 0 (a classe "2" cai a 10/90) | 0 / 0 |
+| idem, α = 600 | 0 / 2 | 25 / 62 |
+
+As chaves (`construir_edicao_up.py` com filtro de classe, G_x dos traços e de
+270 respostas livres) têm AUC 0,87–0,98 por validação cruzada, mas isso vem
+dos 64 problemas em que a ordem natural já é a certa: elas aprendem "posição
+k ▸ item k+1", que o modelo já faz, e nos 26 que importam não mudam nada ou
+estragam. A sonda fechada (`sonda_ordem.py`: ridge um-contra-todos com
+validação leave-one-out sobre o fluxo residual na posição "Items ▸", 10
+camadas, dois λ) acerta exatamente a maioria (68/90) e **0 dos 22 problemas
+em que o 1º item não é o 2**: o item que deveria vir primeiro não está
+codificado linearmente no lugar em que o modelo tem de escrevê-lo. É uma
+comparação entre todas as malas (qual tem o maior ganho) que o modelo nunca
+calcula, e uma edição de posto baixo só redireciona informação que já existe.
+Reordenar exigiria construir o circuito inteiro (atender a cada mala, ler o
+peso e a classe, comparar), o que não tem forma fechada.
+
+**Cópia do exemplo.** `diag_copia.py` passa os 90 traços com atenção eager e,
+em cada uma das 12 213 marcas (330 erradas), guarda por cabeça a massa de
+atenção em cada trecho do contexto (regras, exemplo, pergunta, resposta) e a
+escrita da cabeça na direção correto − errado. Resultado: nos pontos de
+decisão a atenção ao exemplo é 10% da massa em média, e as cabeças que mais o
+olham empurram pouco o token errado. As 8 cabeças de maior pontuação de cópia
+(34.5, 34.6, 38.35, 36.27, 35.15, 34.29, 38.8, 35.22) cobrem 19% do empurrão
+negativo total das cabeças nas marcas erradas, e as mesmas cabeças ajudam nas
+marcas certas (34.5: −0,07 nas erradas, +0,49 nas certas). Zerá-las em
+`o_proj` (`analise_copia.py`, `config_copia8.json` / `config_copia4.json`)
+muda o acerto token a token nos traços de 97,3% para 97,1% (8 cabeças) ou
+97,4% (4 cabeças); a única classe que mexe é a 3ª mala ($150 ▸ +7 e $200 ▸ −9
+com 8, +4 e 0 com 4) e a mais copiada de todas, "over 6▸5" (94 erros), não
+muda. A cópia não é feita por cabeças que leem o exemplo no ponto de decisão:
+quem completa o padrão do exemplo são as MLPs das últimas camadas, e as chaves
+das rodadas 2–6 são exatamente a correção disso.
+
+**Ciclo 9** (ciclo 6 + 4 cabeças zeradas + chaves de ordem com α = 100,
+`config_c9.json`): 6/90, 36 a ±10%, erro mediano 13,6%, nenhum laço, e
+nenhum dos 26 problemas reordenado (15 enumeram na ordem do enunciado, 11
+ilegíveis). Dentro do ruído de lote em relação ao ciclo 6 (10/90) e pior
+na aproximação: as duas edições novas não acrescentam nada que se meça.
+
 ### O que se aprende
 
 - **Três regras corrigidas sem treino.** Os três erros mais frequentes
@@ -489,6 +551,13 @@ contra 3/90 da linha de base, sem nenhuma resposta em laço. Três ressalvas:
   exato (10/90) vem daí, mas a calibração automática que leva todas as chaves
   ao teto colapsa do mesmo jeito (ciclo 8): a porta reduz o vazamento, não o
   elimina.
+- **Chave não calcula.** Reordenar as malas exige comparar todas e escolher
+  a de maior ganho; a sonda fechada mostra que essa escolha não está no fluxo
+  residual onde o modelo a escreve (0/22). Uma correção de posto baixo
+  redireciona informação já presente; o que o modelo não computou não tem
+  onde ser lido. O mesmo vale para a cópia do exemplo: não há cabeça que a
+  faça, logo não há cabeça a desligar; a correção é nas MLPs que completam o
+  padrão.
 - **Teacher forcing não prevê a geração livre.** Nos traços-gabarito a
   rodada 3 fechava 17 decisões; na geração livre colapsou. O que a geração
   livre acrescenta é o texto do próprio modelo, que o traço ideal não tem.
@@ -527,7 +596,12 @@ livres), `medir_livre.py` (marcas nas respostas livres do modelo),
 (acertos, ±10%, laços); fatores em `deltas/fatores_up3_L{22,26,28,30,32,34}.pt`
 com `deltas/classes_up3.json` e a configuração do ciclo 6 (10/90) em
 `edicao_pesos/config_c6.json`. Respostas de cada rodada em
-`results/edicao_pesos/editado_*.jsonl` e `results/edicao_pesos/ciclo{1..8}.jsonl`.
+`results/edicao_pesos/editado_*.jsonl` e `results/edicao_pesos/ciclo{1..9}.jsonl`.
+Rodada 7: `traco_gabarito.py` (`reordenar=True`), `avaliar_ordem.py`,
+`sonda_ordem.py`, `diag_copia.py`, `analise_copia.py`, `comparar_tracos.py`;
+fatores em `deltas/fatores_ord1_L*.pt` com `deltas/classes_ord1.json`,
+configurações `config_ord1_a{100,300,600}.json`, `config_copia{4,8}.json` e
+`config_c9.json`.
 
 ## Limitações
 

@@ -3,7 +3,7 @@
 Modo "tracos": passa os 90 traços-gabarito; em cada marca guarda x (entrada da MLP) nas CAMADAS,
   top-5 e margem do modelo; acumula G_x = Σ x xᵀ (5 120²) sobre todas as posições.
 Modo "livre": passa respostas livres (jsonl) e só acumula G_x (alvo zero), com truncamento.
-Uso: coletar_residual.py tracos <saida.pt> [config|-] [gpu]
+Uso: coletar_residual.py tracos <saida.pt> [config|-] [gpu] [reordenar=0|1]
      coletar_residual.py livre  <saida.pt> <a.jsonl,b.jsonl> [gpu] [max_tokens_resposta]
 """
 import sys, json, torch, collections
@@ -26,14 +26,14 @@ def carregar(gpu, cfg_path=None):
         model.model.layers[L].mlp.register_forward_pre_hook(lambda m, inp, L=L: store.__setitem__(L, inp[0][0].detach()))
     return tok, model, store
 
-def tracos(out_path, cfg_path, gpu):
+def tracos(out_path, cfg_path, gpu, reordenar=False):
     tok, model, store = carregar(gpu, cfg_path); dev = f"cuda:{gpu}"; dm = model.config.hidden_size
     G = {L: torch.zeros(dm, dm, dtype=torch.float32, device=dev) for L in CAMADAS}
     probs = {c: load_airline_problems(c) for c in (0, 1, 2)}; sample = sample_problems(0.3, 42)
     acts, meta, n_pos = [], [], 0
     with torch.no_grad():
         for s in sample:
-            p = probs[s["complexity"]][s["problem_idx"]]; texto, marcas, total = traco(p)
+            p = probs[s["complexity"]][s["problem_idx"]]; texto, marcas, total = traco(p, reordenar)
             prefix = chat_prompt(tok, s["question"], "one_shot"); full = prefix + texto
             enc = tok(full, add_special_tokens=False, return_offsets_mapping=True)
             ids = torch.tensor([enc["input_ids"]], device=dev); starts = [a for a, b in enc["offset_mapping"]]
@@ -72,5 +72,5 @@ def livre(out_path, arquivos, gpu, max_resp):
 
 if __name__ == "__main__":
     a = sys.argv
-    if a[1] == "tracos": tracos(a[2], None if len(a) < 4 or a[3] == "-" else a[3], int(a[4]) if len(a) > 4 else 0)
+    if a[1] == "tracos": tracos(a[2], None if len(a) < 4 or a[3] == "-" else a[3], int(a[4]) if len(a) > 4 else 0, bool(int(a[5])) if len(a) > 5 else False)
     else: livre(a[2], a[3].split(","), int(a[4]) if len(a) > 4 else 0, int(a[5]) if len(a) > 5 else 3000)

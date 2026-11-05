@@ -1,0 +1,34 @@
+{
+ "edicao_up": [
+  {
+   "camada": 20,
+   "arquivo": "results/edicao_pesos/deltas/fatores_ord1_L20.pt",
+   "fatores": [
+    300.0,
+    300.0,
+    300.0,
+    300.0,
+    300.0,
+    300.0
+   ]
+  },
+  {
+   "camada": 31,
+   "arquivo": "results/edicao_pesos/deltas/fatores_ord1_L31.pt",
+   "fatores": [
+    300.0
+   ]
+  },
+  {
+   "camada": 34,
+   "arquivo": "results/edicao_pesos/deltas/fatores_ord1_L34.pt",
+   "fatores": [
+    300.0,
+    300.0,
+    300.0,
+    300.0,
+    300.0
+   ]
+  }
+ ]
+}
