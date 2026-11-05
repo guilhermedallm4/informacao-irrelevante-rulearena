@@ -279,9 +279,13 @@ pergunta sem frase):
 | Qwen3-14B, linha de base refeita | 3 (3.3%) | 2 / 1 / 0 | 26 (29%) | 14.8% |
 | Qwen3-14B editado, α = 500 / 500 / 300 | **6 (6.7%)** | 5 / 1 / 0 | **48 (53%)** | **9.1%** |
 | Qwen3-14B editado, α = 800 / 800 / 500 | 5 (5.6%) | 4 / 1 / 0 | 36 (40%) | 10.5% (16 respostas cortadas em 4 096 tokens) |
+| Rodada 3: 17 decisões, chaves só dos traços-gabarito | 0 (0%) | 0 / 0 / 0 | 13 (14%) | 67 respostas em laço |
+| Rodada 4: 17 decisões, chaves com alvo zero nas respostas livres | 5 (5.6%) | 2 / 3 / 0 | 43 (48%) | 9.1% (6 em laço) |
+| Rodada 5: rodada 2 + 12 decisões da rodada 4 (`config_v7B.json`) | **7 (7.8%)** | 7 / 0 / 0 | 47 (52%) | **7.4%** (8 em laço) |
 
 Com α maior a correção passa do ponto: 16 das 90 respostas entram em laço
-até o limite de tokens. A configuração 500 / 500 / 300 é a final.
+até o limite de tokens. A configuração 500 / 500 / 300 é a final da rodada 2;
+as rodadas 3–5 estão descritas abaixo.
 
 Quatro problemas novos passaram a ser acertados (c0_000, c0_003, c0_054,
 c1_077) e um foi perdido (c1_095). No nível 0, as respostas a ±10% do
@@ -312,6 +316,76 @@ Tipos de erro por item nas 90 respostas (problemas afetados):
 | Peso 54–70 lb na faixa errada | 24 | 29 |
 | Mala >65 in com taxa errada ($150 em vez de $200 nos EUA/Canadá) | 26 | 25 |
 
+### Rodadas 3–5: todas as decisões, meta de 60%
+
+Pedido seguinte: estender a edição manual a todas as regras restantes e
+tentar chegar a 60% de acerto exato. Não chegou: o melhor resultado é 7/90
+(7,8%). O que foi feito e por que o teto é baixo:
+
+1. **Censo por teacher forcing.** Para cada um dos 90 problemas foi escrito o
+   *traço-gabarito*: a resposta ideal no formato exato do exemplo do prompt,
+   com cada ponto de decisão marcado (fatia da lista de taxas, limite de peso
+   70 lb das malas gratuitas de Business/First, faixa 63–65 / >65 in, faixa
+   de peso, taxa de cada faixa por região, totais). 68 dos 90 traços batem
+   com o gabarito; os outros 22 diferem porque o gabarito oficial reordena as
+   malas para aplicar a franquia de Business/First às mais caras, coisa que
+   nenhum modelo faz. Uma passagem do modelo sobre o traço dá, em 4 285
+   pontos de decisão, o top-1 e a margem de logit sem gerar nada
+   (`traco_gabarito.py`, `medir_traco.py`).
+2. **17 classes, mesma forma fechada.** Cada classe (decisão, token correto)
+   com ≥2 erros recebe uma correção de posto 1, w_j = A⁻¹ b_j com
+   A = G + λI + β K_MᵀK_M (G = KᵀK de todas as posições; K_M os pontos
+   marcados com peso β = 100), camada escolhida por validação cruzada
+   (AUC contra os vizinhos da mesma decisão) entre 20 e 34, α_j calibrado a
+   partir da inclinação medida da margem com α = 100
+   (`construir_edicao_v5.py`, `calibrar_v5.py`). Nos traços, isso leva quase
+   todas as decisões a 100%:
+
+   | Decisão (token correto) | n | Sem edição | Rodada 4 |
+   |---|---|---|---|
+   | 1ª mala gratuita: "First Bag: $" ▸ 0 | 74 | 88% | **100%** |
+   | 2ª mala a $100: "Second Bag: $" ▸ 1 | 13 | 23% | **100%** |
+   | 3ª mala a $150: "Third Bag: $" ▸ 1 | 43 | 21% | **86%** |
+   | 63–65 in: "over 6" ▸ 2 | 313 | 70% | **99%** |
+   | >65 in: "over 6" ▸ 5 (não deve mudar) | 315 | 99% | 99% |
+   | 70 lb (Business/First): "Within" | 57 | 33% | **100%** |
+   | 50 lb: "Over" (não deve mudar) | 571 | 92% | 94% |
+   | "but under" / "and over" | 571 | 92% | **98%** |
+   | $450 na Ásia: "the fee is $" ▸ 4 | 35 | 63% | 74% |
+
+3. **Rodada 3 vazou e colapsou (0/90).** As chaves ajustadas só com as
+   posições dos traços (683 mil) disparavam no texto que o modelo escreve
+   por conta própria e que não aparece no traço ideal ("within the Main
+   Cabin allowance", "1st bag and 1st bag…", "2222…"): 67 das 90 respostas
+   entraram em laço. Medir só nos traços não detecta isso.
+4. **Rodada 4: alvo zero nas respostas livres.** G passou a incluir também as
+   ativações de 360 respostas reais (linha de base, rodada 2 e as próprias
+   respostas colapsadas da rodada 3, 2,9 milhões de posições;
+   `coletar_G_livre.py`). As chaves passam a responder ≈1 só nos contextos
+   certos do texto livre ("Third Bag: $", "For dimensions over 6") e ≈0,05
+   no percentil 99 das demais posições (`vazamento_livre.py`). Resultado:
+   5/90, 43 a ±10%, 6 laços, todos ligados à chave "Within" (α = 665).
+5. **Rodada 5: combinação à mão.** Chaves da rodada 2 (camadas 23/24/31)
+   mais 12 classes da rodada 4 com α reduzido à mão ("Within" 250, 2ª mala
+   500, "and" 400, sem as classes já cobertas pela rodada 2): **7/90**, 47 a
+   ±10%, erro mediano 7,4%, 8 laços. Sem as chaves de peso_lim
+   (`config_v7A.json`) não há laço mas o acerto numa fatia de 32 problemas
+   cai de 7 para 5.
+
+Por que não chega a 60%: o acerto exato exige todos os itens certos, e um
+problema tem de 4 a 10 malas. Mesmo na melhor configuração só 12% dos itens
+saem sem nenhum erro (2% na linha de base), e 36 dos 90 problemas ainda têm
+pelo menos um item errado. Dos 54 sem erro de item, só 7 acertam o total: os
+outros erram fora dos itens (qual item vai de bagagem de mão, lista de taxas
+por classe/rota escrita antes dos itens, soma final) e 22 exigem a
+reordenação de malas que o gabarito oficial faz. Os erros restantes mais
+frequentes na rodada 5 são o limite de 70 lb das malas gratuitas (23
+problemas, a chave que mais faz laço quando forte), $150 em vez de $200 para
+malas >65 in nos EUA (19), faixa 54–70 lb (10) e 2ª mala Main Plus a $0 em
+vez de $45 (7, decisão que o modelo acerta no traço e erra no texto livre).
+Cada uma dessas é uma chave a mais com o mesmo risco de vazamento, e o ganho
+em acerto exato por chave tem sido de 1–2 problemas, dentro do ruído de lote.
+
 ### O que se aprende
 
 - **Três regras corrigidas sem treino.** Os três erros mais frequentes
@@ -337,6 +411,16 @@ Tipos de erro por item nas 90 respostas (problemas afetados):
 - **Edição em bf16 some.** Somada entrada a entrada ao peso em bf16, a
   correção é arredondada a zero (cada entrada é menor do que a resolução do
   bf16 nos valores da matriz). É preciso mantê-la fatorada em fp32.
+- **Teacher forcing não prevê a geração livre.** Nos traços-gabarito a
+  rodada 3 fechava 17 decisões; na geração livre colapsou. O que a geração
+  livre acrescenta é o texto do próprio modelo, que o traço ideal não tem.
+  Incluir as respostas reais (inclusive as colapsadas) como alvo zero no
+  ajuste resolveu o vazamento em forma fechada, sem gradiente.
+- **O acerto exato não escala com chaves.** Cada chave corrige uma decisão;
+  o acerto exato exige todas, e os erros fora dos itens (bagagem de mão,
+  lista de taxas, reordenação das malas) não têm um ponto de decisão único
+  para editar. A medida que responde à edição é a aproximação (26 → 48 a
+  ±10%) e o erro mediano (14,8% → 7,4%), não o acerto exato (3 → 7).
 - **Ruído de lote.** A linha de base refeita acerta 3 em vez de 2 e só 44
   das 90 respostas são idênticas à execução publicada, como já medido pelo
   controle do estudo. Diferenças de 1–2 acertos entre execuções não
@@ -348,8 +432,15 @@ Reprodução: `edicao_pesos/sondas.py` (sondas), `diagnostico.py` e
 (estatísticas de todas as posições, rodada 2), `construir_edicao_v3.py`
 (correções fechadas), `varrer_alpha.py` e `avaliar_sondas.py` (varredura e
 avaliação token a token), `gerar.py` (90 problemas) e `comparar.py`. Os
-fatores finais estão em `results/edicao_pesos/deltas/fatores_v4_L{23,24,31}.pt`
-e a configuração em `edicao_pesos/config_v4_500_500_300.json`.
+fatores da rodada 2 estão em `results/edicao_pesos/deltas/fatores_v4_L{23,24,31}.pt`
+(configuração `edicao_pesos/config_v4_500_500_300.json`). Rodadas 3–5:
+`traco_gabarito.py` e `medir_traco.py` (traços e censo por teacher forcing),
+`coletar_G_livre.py` (G das respostas livres), `construir_edicao_v5.py` e
+`calibrar_v5.py` (17 classes e α), `vazamento_livre.py` (resposta das chaves
+no texto livre), `juntar.py` (fatias por GPU); fatores em
+`deltas/fatores_v6_L{22,26,30,32,34}.pt` com `deltas/classes_v6.json`, e a
+configuração final (7/90) em `edicao_pesos/config_v7B.json`. Respostas de
+cada rodada em `results/edicao_pesos/editado_*.jsonl`.
 
 ## Limitações
 

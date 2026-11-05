@@ -42,6 +42,7 @@ def aplicar(model, tok, cfg: dict) -> list[str]:
         log.append(f"down_proj camada {e['camada']}: += {e.get('fator', 1.0)} * ΔW de {e['arquivo']} (||ΔW||={dW.float().norm():.2f})")
     for e in cfg.get("edicao_fatorada", []):
         F = torch.load(e["arquivo"]); a = e.get("fator", 1.0)
+        if "fatores" in e: a = torch.tensor(e["fatores"], dtype=torch.float32).view(1, -1)   # um α por coluna (classe)
         mlp = model.model.layers[e["camada"]].mlp
         base = mlp.down_proj.down if isinstance(mlp.down_proj, DownProjEditado) else mlp.down_proj
         U = F["U"] * a

@@ -1,6 +1,6 @@
 """Gera as respostas limpas dos 90 problemas com o modelo (editado ou não).
 
-Uso: python edicao_pesos/gerar.py <saida.jsonl> [config.json|-] [gpu] [lote]
+Uso: python edicao_pesos/gerar.py <saida.jsonl> [config.json|-] [gpu] [lote] [ini:fim]  (fatia dos 90 problemas; juntar com juntar.py)
 Mesmo protocolo do estudo: 1-shot, decodificação gulosa, 4096 tokens, lote 16.
 """
 import json, sys, torch, collections
@@ -11,7 +11,7 @@ from edicao_pesos.edicoes import aplicar
 
 MODEL = "Qwen/Qwen3-14B"
 
-def main(out, cfg_path, gpu, lote):
+def main(out, cfg_path, gpu, lote, fatia=None):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(MODEL)
     model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map=f"cuda:{gpu}",
@@ -19,6 +19,7 @@ def main(out, cfg_path, gpu, lote):
     edicoes = aplicar(model, tok, json.load(open(cfg_path))) if cfg_path else []
     for l in edicoes: print("  edição:", l)
     sample = sample_problems(0.3, 42)
+    if fatia: sample = sample[fatia[0]:fatia[1]]
     prompts = [chat_prompt(tok, s["question"], "one_shot") for s in sample]
     outs = generate_greedy(model, tok, prompts, 4096, lote, desc="clean")
     rows = []
@@ -35,8 +36,9 @@ def main(out, cfg_path, gpu, lote):
     por_c = collections.Counter(r["complexity"] for r in rows if r["correct"])
     dentro10 = sum(1 for r in rows if r["pred_cents"] and abs(r["pred_cents"]/100 - r["gold"]) <= 0.1*r["gold"])
     sem = sum(1 for r in rows if r["pred_cents"] is None)
-    print(f"RESULTADO {out}: acertos {acc}/90 (C0/C1/C2 = {por_c[0]}/{por_c[1]}/{por_c[2]}), a ±10%: {dentro10}, sem resposta: {sem}, edições: {edicoes}")
+    print(f"RESULTADO {out}: acertos {acc}/{len(rows)} (C0/C1/C2 = {por_c[0]}/{por_c[1]}/{por_c[2]}), a ±10%: {dentro10}, sem resposta: {sem}, edições: {edicoes}")
 
 if __name__ == "__main__":
     a = sys.argv
-    main(a[1], None if len(a) < 3 or a[2] == "-" else a[2], int(a[3]) if len(a) > 3 else 0, int(a[4]) if len(a) > 4 else 16)
+    main(a[1], None if len(a) < 3 or a[2] == "-" else a[2], int(a[3]) if len(a) > 3 else 0, int(a[4]) if len(a) > 4 else 16,
+         tuple(int(x) for x in a[5].split(":")) if len(a) > 5 else None)

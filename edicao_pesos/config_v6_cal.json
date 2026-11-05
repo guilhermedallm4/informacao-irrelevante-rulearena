@@ -1,0 +1,51 @@
+{
+ "edicao_fatorada": [
+  {
+   "camada": 22,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v6_L22.pt",
+   "fatores": [
+    465.4,
+    358.9,
+    665.1
+   ]
+  },
+  {
+   "camada": 26,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v6_L26.pt",
+   "fatores": [
+    800.0,
+    329.6
+   ]
+  },
+  {
+   "camada": 30,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v6_L30.pt",
+   "fatores": [
+    268.6
+   ]
+  },
+  {
+   "camada": 32,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v6_L32.pt",
+   "fatores": [
+    800.0
+   ]
+  },
+  {
+   "camada": 34,
+   "arquivo": "results/edicao_pesos/deltas/fatores_v6_L34.pt",
+   "fatores": [
+    183.0,
+    287.8,
+    180.9,
+    475.0,
+    359.6,
+    0.0,
+    77.1,
+    69.3,
+    0.0,
+    357.4
+   ]
+  }
+ ]
+}
